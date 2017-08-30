@@ -82,7 +82,7 @@ int pcapng_dump_epb(FILE *dump_fd, struct pcapng_epb_block *epb_block) {
     fwrite(&(epb_block -> timestamp_low), 4, 1, dump_fd);
     fwrite(&(epb_block -> captured_len), 4, 1, dump_fd);
     fwrite(&(epb_block -> packet_len), 4, 1, dump_fd);
-    fwrite(&(epb_block -> packet_data), epb_block -> captured_len, 1, dump_fd);
+    fwrite(epb_block -> packet_data, epb_block -> captured_len, 1, dump_fd);
     fwrite(&(epb_block -> block_total_length), 4, 1, dump_fd);
     return 0;
 }
@@ -112,7 +112,7 @@ int pcapng_test() {
     struct pcapng_idb_block idb_block = { 
         .block_type = 0x00000001,
         .block_total_length = 20,
-        .linktype = 1,
+        .linktype = 0,
         .reserved = 0,
         .snaplen = 0x0000FFFF,
         .options = NULL
@@ -125,7 +125,7 @@ int pcapng_test() {
         .timestamp_high = 0,
         .captured_len = 4,
         .packet_len = 4,
-        .packet_data = "Hel",
+        .packet_data = "Yoyo",
         .options = NULL
     };
     struct pcapng_epb_block *epb_block_p = &epb_block;
