@@ -1,5 +1,30 @@
 #include <stdio.h>
 #include <stdint.h>
+#include <pcap.h>
+
+/*TODO:
+    -Timestamp output appears to be broken.
+*/
+
+uint32_t four_align(uint32_t x) {
+    if (x % 4 == 0)
+        return x;
+    return x + 4 - (x % 4);
+}
+
+uint32_t get_ts_low(struct timeval ts) {
+    uint64_t s_to_usec = ts.tv_sec * 1000000;
+    uint64_t timestamp = ts.tv_usec + s_to_usec;
+    uint32_t lower = timestamp & 0x00000000FFFFFFFF;
+    return lower;
+}
+
+uint32_t get_ts_high(struct timeval ts) {
+    uint64_t s_to_usec = ts.tv_sec * 1000000;
+    uint64_t timestamp = ts.tv_usec + s_to_usec;
+    uint32_t higher = timestamp >> 32;
+    return higher;
+}
 
 struct pcapng_option_item {
     uint16_t option_code;
@@ -14,7 +39,7 @@ struct pcapng_shb_block {
     uint16_t major_version;
     uint16_t minor_version;
     uint64_t section_length;
-    struct pcapng_option_item *options;
+    struct pcapng_option_item *option;
     //End options with Option Code == opt_endofopt  |  Option Length == 0 
     //End with block_total_length
 };
@@ -25,7 +50,7 @@ struct pcapng_idb_block {
     uint16_t linktype;
     uint16_t reserved;
     uint32_t snaplen;
-    struct pcapng_option_item *options;
+    struct pcapng_option_item *option;
     //End options with Option Code == opt_endofopt  |  Option Length == 0 
     //End with block_total_length
 };
@@ -39,7 +64,7 @@ struct pcapng_epb_block {
     uint32_t captured_len;
     uint32_t packet_len;
     uint8_t *packet_data;
-    struct pcapng_options_item *options;
+    struct pcapng_option_item *option;
     //End options with Option Code == opt_endofopt  |  Option Length == 0 
     //End with block_total_length
 };
@@ -75,6 +100,7 @@ int pcapng_dump_idb(FILE *dump_fd, struct pcapng_idb_block *idb_block) {
 }
 
 int pcapng_dump_epb(FILE *dump_fd, struct pcapng_epb_block *epb_block) {
+    char zeros[] = {0, 0, 0, 0};
     fwrite(&(epb_block -> block_type), 4, 1, dump_fd);
     fwrite(&(epb_block -> block_total_length), 4, 1, dump_fd);
     fwrite(&(epb_block -> interface_id), 4, 1, dump_fd);
@@ -83,6 +109,16 @@ int pcapng_dump_epb(FILE *dump_fd, struct pcapng_epb_block *epb_block) {
     fwrite(&(epb_block -> captured_len), 4, 1, dump_fd);
     fwrite(&(epb_block -> packet_len), 4, 1, dump_fd);
     fwrite(epb_block -> packet_data, epb_block -> captured_len, 1, dump_fd);
+    fwrite(zeros, four_align(epb_block -> captured_len) - epb_block -> captured_len, 1, dump_fd);
+    if (epb_block -> option != NULL) {
+        struct pcapng_option_item* opt = epb_block -> option;
+        fwrite(&(opt->option_code), 2, 1, dump_fd);
+        fwrite(&(opt->option_length), 2, 1, dump_fd);
+        fwrite(opt->option_value, opt->option_length, 1, dump_fd);
+        //write endopt
+        fwrite(zeros, 2, 1, dump_fd);
+        fwrite(zeros, 2, 1, dump_fd);
+    }
     fwrite(&(epb_block -> block_total_length), 4, 1, dump_fd);
     return 0;
 }
@@ -98,8 +134,7 @@ int pcapng_simple_dump(FILE *dump_fd, struct pcapng_simple_capture *capture) {
     return 0;
 }
 
-int pcapng_test() {
-    FILE *dump_fd = fopen("test.pcapng", "wb");
+int pcapng_dump_init(FILE *dump_fd) {
     struct pcapng_shb_block shb_block = { 
         .block_type = 0x0a0d0d0a,
         .block_total_length = 28,
@@ -107,39 +142,75 @@ int pcapng_test() {
         .major_version = 0x0001,
         .minor_version = 0x0000,
         .section_length = 0,
-        .options = NULL
+        .option = NULL
     };
     struct pcapng_idb_block idb_block = { 
         .block_type = 0x00000001,
         .block_total_length = 20,
-        .linktype = 0,
+        .linktype = 1,
         .reserved = 0,
         .snaplen = 0x0000FFFF,
-        .options = NULL
+        .option = NULL
+    };
+    pcapng_dump_shb(dump_fd, &shb_block);
+    pcapng_dump_idb(dump_fd, &idb_block);
+}
+
+void got_packet(u_char *file, const struct pcap_pkthdr *header, const u_char *packet) {
+    struct pcapng_option_item option = {
+        .option_code = 1,
+        .option_length = 8,
+        .option_value = "Session4"
     };
     struct pcapng_epb_block epb_block = { 
         .block_type = 0x00000006,
-        .block_total_length = 36,
+        .block_total_length = 32 + four_align(header->caplen) + 12 + 4,
         .interface_id = 0,
-        .timestamp_low = 0,
-        .timestamp_high = 0,
-        .captured_len = 4,
-        .packet_len = 4,
-        .packet_data = "Yoyo",
-        .options = NULL
+        .timestamp_low = get_ts_low(header->ts),
+        .timestamp_high = get_ts_high(header->ts),
+        .captured_len = header->caplen,
+        .packet_len = header->len,
+        .packet_data = packet,
+        .option = &option
     };
-    struct pcapng_epb_block *epb_block_p = &epb_block;
-    struct pcapng_simple_capture capture = {
-        .shb_block = &shb_block,
-        .idb_block = &idb_block,
-        .epb_blocks = &epb_block_p,
-        .epb_count = 1,
-    };
-    pcapng_simple_dump(dump_fd, &capture);
-    fclose(dump_fd);
-    return 0;
+    pcapng_dump_epb((FILE*)file, &epb_block);
 }
 
 int main() {
-    pcapng_test();
+    pcap_t *handle;			/* Session handle */
+    char *dev;			/* The device to sniff on */
+    char errbuf[PCAP_ERRBUF_SIZE];	/* Error string */
+    bpf_u_int32 mask;		/* Our netmask */
+    bpf_u_int32 net;		/* Our IP */
+    struct pcap_pkthdr header;	/* The header that pcap gives us */
+    const u_char *packet;		/* The actual packet */
+    pcap_if_t *alldevsp;
+
+    pcap_findalldevs(&alldevsp, errbuf);
+    dev = alldevsp -> name; //use alldevsp -> next -> name if default doesn't work
+    printf("Using device %s (%s)\n", dev, alldevsp -> description);
+
+    /* Find the properties for the device */
+    if (pcap_lookupnet(dev, &net, &mask, errbuf) == -1) {
+        fprintf(stderr, "Couldn't get netmask for device %s: %s\n", dev, errbuf);
+        net = 0;
+        mask = 0;
+    }
+    /* Open the session in promiscuous mode */
+    handle = pcap_open_live(dev, BUFSIZ, 1, 0, errbuf);
+    if (handle == NULL) {
+        fprintf(stderr, "Couldn't open device %s: %s\n", dev, errbuf);
+        return(2);
+    }
+
+    FILE *dump_fd = fopen("test.pcapng", "wb");
+    pcapng_dump_init(dump_fd);
+
+    printf("Starting loop\n");
+    pcap_loop(handle, 20, got_packet, (u_char*)dump_fd);
+    printf("Done looping");
+
+    pcap_close(handle);
+    fclose(dump_fd);
+    return 0;
 }
