@@ -160,7 +160,7 @@ void got_packet(u_char *file, const struct pcap_pkthdr *header, const u_char *pa
     struct pcapng_option_item option = {
         .option_code = 1,
         .option_length = 8,
-        .option_value = "Session4"
+        .option_value = "Comment."
     };
     struct pcapng_epb_block epb_block = { 
         .block_type = 0x00000006,
